@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codelens — AI Code Review Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          base: '#0B0E14',
+          surface: '#12161F',
+          surface2: '#1A2029',
+          subtle: '#232938',
+          primary: '#E6E8EB',
+          secondary: '#8B92A5',
+          muted: '#5A6072',
+          accent: '#6366F1',
+          accentdark: '#4F46E5',
+          success: '#22C55E',
+          warning: '#F59E0B',
+          danger: '#EF4444',
+        },
+        fontFamily: {
+          display: ['"Space Grotesk"', 'sans-serif'],
+          body: ['"Inter"', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { background: #0B0E14; }
+  .code-grid-bg {
+    background-image:
+      repeating-linear-gradient(to bottom, rgba(139,146,165,0.05) 0, rgba(139,146,165,0.05) 1px, transparent 1px, transparent 28px);
+  }
+  .tab-active { color: #E6E8EB; border-color: #6366F1; }
+  .tab-inactive { color: #8B92A5; border-color: transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #232938; border-radius: 4px; }
+  .dropzone-active { border-color: #6366F1 !important; background: rgba(99,102,241,0.06) !important; }
+  textarea:focus, input:focus { outline: none; }
+
+  /* ============================================================
+     Login form animations
+     ============================================================ */
+  @keyframes orb-float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(30px, -20px) scale(1.08); }
+  }
+  @keyframes auth-card-in {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes field-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-6px); }
+    40%, 80% { transform: translateX(6px); }
+  }
+
+  .orb {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(60px);
+    opacity: 0.35;
+    animation: orb-float 9s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .orb-1 { background: #6366F1; width: 260px; height: 260px; top: -60px; left: -40px; }
+  .orb-2 { background: #4F46E5; width: 220px; height: 220px; bottom: -60px; right: -40px; animation-delay: -4s; }
+
+  .auth-card {
+    animation: auth-card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+    backdrop-filter: blur(6px);
+  }
+  .auth-card.shake { animation: shake 0.4s ease; }
+
+  .auth-field {
+    opacity: 0;
+    animation: field-in 0.4s ease both;
+  }
+
+  .auth-input-wrap { position: relative; }
+  .auth-input-icon {
+    position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
+    color: #5A6072; pointer-events: none; transition: color 150ms;
+  }
+  .auth-input {
+    padding-left: 2.25rem;
+    transition: border-color 150ms, box-shadow 150ms, background-color 150ms;
+  }
+  .auth-input:focus {
+    border-color: #6366F1;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+    background-color: #1A2029;
+  }
+  .auth-input:focus + .auth-input-icon,
+  .auth-input-wrap:focus-within .auth-input-icon { color: #6366F1; }
+
+  .auth-tab-indicator {
+    position: absolute; bottom: -1px; left: 0; height: 2px; width: 50%;
+    background: #6366F1;
+    transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .auth-submit-btn {
+    position: relative;
+    transition: transform 150ms, box-shadow 150ms, background-color 150ms;
+  }
+  .auth-submit-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px -6px rgba(99,102,241,0.5);
+  }
+  .auth-submit-btn:active:not(:disabled) { transform: translateY(0); }
+  .auth-submit-btn:disabled { opacity: 0.75; cursor: not-allowed; }
+
+  .auth-spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+    border-radius: 9999px; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .orb, .auth-card, .auth-field, .auth-card.shake, .auth-spinner { animation: none !important; }
+  }
+</style>
+</head>
+<body class="font-body text-primary antialiased">
+
+<!-- ============================================================ -->
+<!-- AUTH VIEW -->
+<!-- ============================================================ -->
+<div id="authView" class="min-h-screen flex items-center justify-center relative code-grid-bg px-4 overflow-hidden">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+
+  <div class="w-full max-w-sm relative">
+    <div class="flex items-center justify-center gap-2 mb-8">
+      <span class="font-mono text-accent text-2xl font-semibold">&lt;/&gt;</span>
+      <span class="font-display text-xl font-semibold tracking-tight">Codelens</span>
+    </div>
+
+    <div id="authCard" class="auth-card bg-surface border border-subtle rounded-xl p-6">
+      <div class="relative flex mb-6 border-b border-subtle">
+        <button id="tabLoginBtn" onclick="switchAuthTab('login')" class="flex-1 text-center px-3 py-2 text-sm font-medium tab-active">Log in</button>
+        <button id="tabRegisterBtn" onclick="switchAuthTab('register')" class="flex-1 text-center px-3 py-2 text-sm font-medium tab-inactive">Create account</button>
+        <div id="authTabIndicator" class="auth-tab-indicator"></div>
+      </div>
+
+      <!-- Login form -->
+      <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
+        <div class="auth-field" style="animation-delay: 0.05s">
+          <label class="block text-xs font-medium text-secondary mb-1.5">Email</label>
+          <div class="auth-input-wrap">
+            <input type="email" required placeholder="you@example.com" class="auth-input w-full bg-surface2 border border-subtle rounded-lg pr-3 py-2 text-sm placeholder-muted">
+            <span class="auth-input-icon">✉</span>
+          </div>
+        </div>
+        <div class="auth-field" style="animation-delay: 0.1s">
+          <label class="block text-xs font-medium text-secondary mb-1.5">Password</label>
+          <div class="auth-input-wrap">
+            <input type="password" required placeholder="••••••••" class="auth-input w-full bg-surface2 border border-subtle rounded-lg pr-3 py-2 text-sm placeholder-muted">
+            <span class="auth-input-icon">🔒</span>
+          </div>
+        </div>
+        <p id="loginError" class="hidden text-xs text-danger"></p>
+        <button type="submit" id="loginSubmitBtn" class="auth-submit-btn auth-field w-full bg-accent hover:bg-accentdark rounded-lg py-2 text-sm font-medium text-white flex items-center justify-center gap-2" style="animation-delay: 0.15s">
+          <span class="auth-spinner hidden"></span>
+          <span class="btn-label">Log in</span>
+        </button>
+        <p class="text-xs text-secondary text-center pt-1 auth-field" style="animation-delay: 0.2s">Forgot your password? <a href="#" onclick="alert('Password reset would call POST /api/auth/reset'); return false;" class="text-accent hover:underline">Reset it</a></p>
+      </form>
+
+      <!-- Register form -->
+      <form id="registerForm" onsubmit="handleRegister(event)" class="space-y-4 hidden">
+        <div class="auth-field" style="animation-delay: 0.05s">
+          <label class="block text-xs font-medium text-secondary mb-1.5">Name</label>
+          <div class="auth-input-wrap">
+            <input type="text" required placeholder="Ada Lovelace" class="auth-input w-full bg-surface2 border border-subtle rounded-lg pr-3 py-2 text-sm placeholder-muted">
+            <span class="auth-input-icon">👤</span>
+          </div>
+        </div>
+        <div class="auth-field" style="animation-delay: 0.1s">
+          <label class="block text-xs font-medium text-secondary mb-1.5">Email</label>
+          <div class="auth-input-wrap">
+            <input type="email" required placeholder="you@example.com" class="auth-input w-full bg-surface2 border border-subtle rounded-lg pr-3 py-2 text-sm placeholder-muted">
+            <span class="auth-input-icon">✉</span>
+          </div>
+        </div>
+        <div class="auth-field" style="animation-delay: 0.15s">
+          <label class="block text-xs font-medium text-secondary mb-1.5">Password</label>
+          <div class="auth-input-wrap">
+            <input type="password" required placeholder="At least 8 characters" class="auth-input w-full bg-surface2 border border-subtle rounded-lg pr-3 py-2 text-sm placeholder-muted">
+            <span class="auth-input-icon">🔒</span>
+          </div>
+        </div>
+        <button type="submit" id="registerSubmitBtn" class="auth-submit-btn auth-field w-full bg-accent hover:bg-accentdark rounded-lg py-2 text-sm font-medium text-white flex items-center justify-center gap-2" style="animation-delay: 0.2s">
+          <span class="auth-spinner hidden"></span>
+          <span class="btn-label">Create account</span>
+        </button>
+      </form>
+    </div>
+    <p class="text-center text-xs text-muted mt-6">Static analysis meets AI review, in one dashboard.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APP SHELL -->
+<!-- ============================================================ -->
+<div id="appShell" class="hidden min-h-screen flex">
+
+  <aside class="w-60 shrink-0 border-r border-subtle bg-surface flex flex-col">
+    <div class="h-16 flex items-center gap-2 px-5 border-b border-subtle">
+      <span class="font-mono text-accent text-lg font-semibold">&lt;/&gt;</span>
+      <span class="font-display text-base font-semibold tracking-tight">Codelens</span>
+    </div>
+    <nav class="flex-1 px-3 py-4 space-y-1">
+      <button onclick="showSubmission()" id="navSubmission" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-surface2 text-secondary">
+        <span class="font-mono text-accent">+</span> New review
+      </button>
+      <button onclick="showDashboard()" id="navDashboard" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-surface2 text-secondary">
+        <span class="font-mono">▤</span> Reviews
+      </button>
+    </nav>
+    <div class="p-4 border-t border-subtle">
+      <div class="flex items-center justify-between">
+        <div>
+          <p id="sidebarUserName" class="text-sm font-medium">—</p>
+          <p id="sidebarUserEmail" class="text-xs text-secondary">—</p>
+        </div>
+        <button onclick="handleLogout()" title="Log out" class="text-secondary hover:text-primary text-sm">⏻</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="flex-1 overflow-y-auto">
+
+    <!-- SUBMISSION VIEW -->
+    <div id="submissionView" class="max-w-3xl mx-auto px-8 py-10">
+      <h1 class="font-display text-2xl font-semibold mb-1">New review</h1>
+      <p class="text-secondary text-sm mb-8">Submit code for static analysis and AI review.</p>
+
+      <div>
+        <label class="block text-xs font-medium text-secondary mb-1.5">Project name</label>
+        <input id="projectNameInput" type="text" placeholder="e.g. billing-module" class="w-full bg-surface border border-subtle rounded-lg px-3 py-2 text-sm placeholder-muted focus:border-accent mb-6">
+      </div>
+
+      <div class="flex gap-1 mb-5 border-b border-subtle">
+        <button onclick="switchSubmitTab('upload')" id="subTabUpload" class="px-3 py-2 text-sm font-medium border-b-2 tab-active">Upload file</button>
+        <button onclick="switchSubmitTab('paste')" id="subTabPaste" class="px-3 py-2 text-sm font-medium border-b-2 tab-inactive">Paste code</button>
+        <button onclick="switchSubmitTab('github')" id="subTabGithub" class="px-3 py-2 text-sm font-medium border-b-2 tab-inactive">GitHub URL</button>
+      </div>
+
+      <!-- Upload panel -->
+      <div id="submitPanelUpload">
+        <div id="dropzone" ondragover="event.preventDefault(); this.classList.add('dropzone-active')" ondragleave="this.classList.remove('dropzone-active')" ondrop="handleDrop(event)" onclick="document.getElementById('fileInput').click()" class="border border-dashed border-subtle rounded-xl py-14 text-center cursor-pointer hover:border-muted transition-colors">
+          <p class="font-mono text-secondary text-sm mb-1" id="dropzoneLabel">Drag and drop a .py or .js file here</p>
+          <p class="text-xs text-muted">or click to browse</p>
+          <input id="fileInput" type="file" accept=".py,.js" class="hidden" onchange="handleFileSelect(event)">
+        </div>
+      </div>
+
+      <!-- Paste panel -->
+      <div id="submitPanelPaste" class="hidden">
+        <textarea id="pasteCodeArea" rows="12" placeholder="Paste your code here..." class="w-full bg-surface border border-subtle rounded-lg px-4 py-3 text-sm font-mono placeholder-muted focus:border-accent resize-none"></textarea>
+      </div>
+
+      <!-- GitHub panel -->
+      <div id="submitPanelGithub" class="hidden space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1.5">Repository URL</label>
+          <input id="githubUrlInput" type="text" placeholder="https://github.com/username/repo" class="w-full bg-surface border border-subtle rounded-lg px-3 py-2 text-sm font-mono placeholder-muted focus:border-accent">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1.5">Branch <span class="text-muted">(optional)</span></label>
+          <input id="githubBranchInput" type="text" placeholder="main" class="w-full bg-surface border border-subtle rounded-lg px-3 py-2 text-sm font-mono placeholder-muted focus:border-accent">
+        </div>
+      </div>
+
+      <p id="submitError" class="hidden text-xs text-danger mt-4"></p>
+      <button onclick="startReview()" class="mt-6 bg-accent hover:bg-accentdark transition-colors rounded-lg px-5 py-2.5 text-sm font-medium text-white">Run review</button>
+    </div>
+
+    <!-- DASHBOARD VIEW -->
+    <div id="dashboardView" class="hidden max-w-5xl mx-auto px-8 py-10">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="font-display text-2xl font-semibold mb-1">Reviews</h1>
+          <p class="text-secondary text-sm">All your submitted projects and their results.</p>
+        </div>
+        <button onclick="showSubmission()" class="bg-accent hover:bg-accentdark transition-colors rounded-lg px-4 py-2 text-sm font-medium text-white">+ New review</button>
+      </div>
+
+      <div class="flex gap-3 mb-5">
+        <input id="searchInput" type="text" placeholder="Search by project name..." oninput="renderDashboard()" class="flex-1 bg-surface border border-subtle rounded-lg px-3 py-2 text-sm placeholder-muted focus:border-accent">
+        <select id="statusFilter" onchange="renderDashboard()" class="bg-surface border border-subtle rounded-lg px-3 py-2 text-sm">
+          <option value="all">All statuses</option>
+          <option value="completed">Completed</option>
+          <option value="processing">Processing</option>
+          <option value="failed">Failed</option>
+        </select>
+      </div>
+
+      <div id="reviewList" class="space-y-2"></div>
+      <div id="emptyState" class="hidden text-center py-16 border border-dashed border-subtle rounded-xl">
+        <p class="text-secondary text-sm">No reviews match your filters yet.</p>
+      </div>
+    </div>
+
+    <!-- DETAIL VIEW -->
+    <div id="detailView" class="hidden max-w-4xl mx-auto px-8 py-10">
+      <button onclick="showDashboard()" class="text-secondary hover:text-primary text-sm mb-6 flex items-center gap-1">← Back to reviews</button>
+      <div id="detailContent"></div>
+    </div>
+
+  </main>
+</div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+// ============================================================
+// Supabase setup
+// Replace these two values with your project's own URL and anon key:
+// Supabase dashboard > Project Settings > API.
+// The anon key is safe to expose in frontend code — it only grants
+// access to what your RLS policies (see schema.sql) allow.
+// ============================================================
+const SUPABASE_URL = 'https://YOUR-PROJECT-REF.supabase.co';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+let supabase = null;
+let supabaseConfigured = false;
+try {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseConfigured = !SUPABASE_URL.includes('YOUR-PROJECT-REF') && SUPABASE_ANON_KEY !== 'YOUR_SUPABASE_ANON_KEY';
+} catch (err) {
+  // A malformed URL (e.g. still a placeholder with no protocol) throws here.
+  // Catching it means the rest of this script still loads and onclick
+  // handlers still work, instead of the whole page silently breaking.
+  console.error('Supabase client could not be created — check SUPABASE_URL/SUPABASE_ANON_KEY:', err);
+}
+
+if (!supabaseConfigured) {
+  const banner = document.createElement('div');
+  banner.textContent = '⚠ Supabase isn\'t configured yet — edit SUPABASE_URL and SUPABASE_ANON_KEY near the top of the <script type="module"> block.';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#F59E0B;color:#1A1400;font-size:13px;font-family:Inter,sans-serif;text-align:center;padding:8px;';
+  document.body.prepend(banner);
+}
+
+// Flask backend that runs the actual analysis pipeline (see /backend).
+const BACKEND_URL = 'http://localhost:5000';
+
+// ============================================================
+// State
+// ============================================================
+let currentUser = null;
+let reviews = [];
+let currentReviewId = null;
+let activeSubmitTab = 'upload';
+let selectedFileName = null;
+let selectedFile = null;
+
+// Restore an existing session on page load (e.g. after a refresh)
+async function init() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session) {
+    currentUser = session.user;
+    await enterApp();
+  }
+}
+init();
+
+// ============================================================
+// Auth
+// ============================================================
+function switchAuthTab(tab) {
+  const isLogin = tab === 'login';
+  document.getElementById('tabLoginBtn').className = 'flex-1 text-center px-3 py-2 text-sm font-medium ' + (isLogin ? 'tab-active' : 'tab-inactive');
+  document.getElementById('tabRegisterBtn').className = 'flex-1 text-center px-3 py-2 text-sm font-medium ' + (!isLogin ? 'tab-active' : 'tab-inactive');
+  document.getElementById('authTabIndicator').style.transform = isLogin ? 'translateX(0)' : 'translateX(100%)';
+
+  document.getElementById('loginForm').classList.toggle('hidden', !isLogin);
+  document.getElementById('registerForm').classList.toggle('hidden', isLogin);
+
+  // Replay the staggered field entrance animation for whichever form just appeared.
+  const visibleForm = document.getElementById(isLogin ? 'loginForm' : 'registerForm');
+  visibleForm.querySelectorAll('.auth-field').forEach(el => {
+    el.style.animation = 'none';
+    void el.offsetWidth; // force reflow so the animation restarts
+    el.style.animation = '';
+  });
+}
+
+function setAuthLoading(buttonId, isLoading) {
+  const btn = document.getElementById(buttonId);
+  btn.disabled = isLoading;
+  btn.querySelector('.auth-spinner').classList.toggle('hidden', !isLoading);
+}
+
+function shakeAuthCard() {
+  const card = document.getElementById('authCard');
+  card.classList.remove('shake');
+  void card.offsetWidth;
+  card.classList.add('shake');
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  const email = e.target.querySelector('input[type=email]').value;
+  const password = e.target.querySelector('input[type=password]').value;
+  const errorEl = document.getElementById('loginError');
+
+  setAuthLoading('loginSubmitBtn', true);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  setAuthLoading('loginSubmitBtn', false);
+
+  if (error) {
+    errorEl.textContent = error.message;
+    errorEl.classList.remove('hidden');
+    shakeAuthCard();
+    return;
+  }
+  errorEl.classList.add('hidden');
+  currentUser = data.user;
+  await enterApp();
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  const inputs = e.target.querySelectorAll('input');
+  const name = inputs[0].value;
+  const email = inputs[1].value;
+  const password = inputs[2].value;
+
+  setAuthLoading('registerSubmitBtn', true);
+  // "name" lands in raw_user_meta_data, which the handle_new_user trigger
+  // in schema.sql reads to populate the profiles table automatically.
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { name } },
+  });
+  setAuthLoading('registerSubmitBtn', false);
+
+  if (error) {
+    alert(error.message);
+    shakeAuthCard();
+    return;
+  }
+  if (!data.session) {
+    // Email confirmation is likely enabled in Supabase Auth settings.
+    alert('Account created. Check your email to confirm before logging in.');
+    switchAuthTab('login');
+    return;
+  }
+  currentUser = data.user;
+  await enterApp();
+}
+
+async function handleLogout() {
+  await supabase.auth.signOut();
+  currentUser = null;
+  document.getElementById('appShell').classList.add('hidden');
+  document.getElementById('authView').classList.remove('hidden');
+}
+
+async function enterApp() {
+  document.getElementById('sidebarUserName').textContent = currentUser.user_metadata?.name || currentUser.email;
+  document.getElementById('sidebarUserEmail').textContent = currentUser.email;
+  document.getElementById('authView').classList.add('hidden');
+  document.getElementById('appShell').classList.remove('hidden');
+  await showDashboard();
+}
+
+// ============================================================
+// View switching
+// ============================================================
+function setActiveNav(name) {
+  document.getElementById('navSubmission').classList.toggle('bg-surface2', name === 'submission');
+  document.getElementById('navSubmission').classList.toggle('text-primary', name === 'submission');
+  document.getElementById('navDashboard').classList.toggle('bg-surface2', name === 'dashboard');
+  document.getElementById('navDashboard').classList.toggle('text-primary', name === 'dashboard');
+}
+
+function showSubmission() {
+  document.getElementById('submissionView').classList.remove('hidden');
+  document.getElementById('dashboardView').classList.add('hidden');
+  document.getElementById('detailView').classList.add('hidden');
+  setActiveNav('submission');
+}
+
+async function showDashboard() {
+  document.getElementById('submissionView').classList.add('hidden');
+  document.getElementById('dashboardView').classList.remove('hidden');
+  document.getElementById('detailView').classList.add('hidden');
+  setActiveNav('dashboard');
+  await fetchReviews();
+  renderDashboard();
+}
+
+// Pull each project + its most recent review + findings for the logged-in
+// user. RLS policies (schema.sql) already restrict this to owned rows.
+async function fetchReviews() {
+  const { data, error } = await supabase
+    .from('projects')
+    .select(`
+      id, project_name, upload_type, source_url, created_at,
+      reviews ( id, status, review_score, maintainability_index, cyclomatic_complexity,
+                total_lines_of_code, num_functions, num_classes, created_at,
+                review_findings ( severity, tool_source, issue, explanation, suggestion, file_name, line_number ) )
+    `)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Failed to load reviews:', error.message);
+    reviews = [];
+    return;
+  }
+
+  // Flatten each project + its review into one row for the UI.
+  reviews = data.map(project => {
+    const review = (project.reviews || [])[0] || {};
+    return {
+      id: review.id || null,
+      project_id: project.id,
+      project_name: project.project_name,
+      upload_type: project.upload_type,
+      status: review.status || 'pending',
+      review_score: review.review_score ?? null,
+      maintainability_index: review.maintainability_index ?? null,
+      cyclomatic_complexity: review.cyclomatic_complexity ?? null,
+      total_lines_of_code: review.total_lines_of_code ?? null,
+      num_functions: review.num_functions ?? null,
+      num_classes: review.num_classes ?? null,
+      created_at: (project.created_at || '').slice(0, 10),
+      findings: review.review_findings || [],
+    };
+  });
+}
+
+function showDetail(id) {
+  currentReviewId = id;
+  document.getElementById('submissionView').classList.add('hidden');
+  document.getElementById('dashboardView').classList.add('hidden');
+  document.getElementById('detailView').classList.remove('hidden');
+  renderDetail(id);
+}
+
+// ============================================================
+// Submission form
+// ============================================================
+function switchSubmitTab(tab) {
+  activeSubmitTab = tab;
+  ['upload', 'paste', 'github'].forEach(t => {
+    document.getElementById('subTab' + t.charAt(0).toUpperCase() + t.slice(1)).className =
+      'px-3 py-2 text-sm font-medium border-b-2 ' + (t === tab ? 'tab-active' : 'tab-inactive');
+    document.getElementById('submitPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('hidden', t !== tab);
+  });
+}
+
+function handleFileSelect(e) {
+  if (e.target.files.length) {
+    selectedFile = e.target.files[0];
+    selectedFileName = selectedFile.name;
+    document.getElementById('dropzoneLabel').textContent = 'Selected: ' + selectedFileName;
+  }
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('dropzone-active');
+  if (e.dataTransfer.files.length) {
+    selectedFile = e.dataTransfer.files[0];
+    selectedFileName = selectedFile.name;
+    document.getElementById('dropzoneLabel').textContent = 'Selected: ' + selectedFileName;
+  }
+}
+
+async function startReview() {
+  const projectName = document.getElementById('projectNameInput').value.trim();
+  const errorEl = document.getElementById('submitError');
+  errorEl.classList.add('hidden');
+
+  if (!projectName) {
+    errorEl.textContent = 'Give your project a name first.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (activeSubmitTab === 'upload' && !selectedFileName) {
+    errorEl.textContent = 'Select a file to upload.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (activeSubmitTab === 'paste' && !document.getElementById('pasteCodeArea').value.trim()) {
+    errorEl.textContent = 'Paste some code first.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (activeSubmitTab === 'github' && !document.getElementById('githubUrlInput').value.trim()) {
+    errorEl.textContent = 'Enter a GitHub repository URL.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const uploadType = activeSubmitTab === 'upload' ? 'file_upload' : activeSubmitTab === 'paste' ? 'code_paste' : 'github';
+  const sourceUrl = activeSubmitTab === 'github' ? document.getElementById('githubUrlInput').value.trim() : null;
+
+  // 1. Create the project row.
+  const { data: project, error: projectError } = await supabase
+    .from('projects')
+    .insert({ user_id: currentUser.id, project_name: projectName, upload_type: uploadType, source_url: sourceUrl })
+    .select()
+    .single();
+
+  if (projectError) {
+    errorEl.textContent = projectError.message;
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  // 2. Create the review row that analysis results will attach to.
+  const { data: review, error: reviewError } = await supabase
+    .from('reviews')
+    .insert({ project_id: project.id, status: 'processing' })
+    .select()
+    .single();
+
+  if (reviewError) {
+    errorEl.textContent = reviewError.message;
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  await showDashboard();
+
+  // 3. Hand off to the Flask backend, which runs Pylint/Bandit/Radon + the
+  // AI review and writes the results (status, metrics, findings) directly
+  // into Supabase. We don't need to do anything with the response body —
+  // once it's done, re-fetching from Supabase picks up the real results.
+  const { data: { session } } = await supabase.auth.getSession();
+  const formData = new FormData();
+  formData.append('project_id', project.id);
+  formData.append('review_id', review.id);
+  formData.append('upload_type', uploadType);
+
+  if (uploadType === 'file_upload') {
+    formData.append('file', selectedFile);
+  } else if (uploadType === 'code_paste') {
+    formData.append('code', document.getElementById('pasteCodeArea').value);
+    formData.append('filename', projectName.replace(/\s+/g, '_') + '.py');
+  } else {
+    formData.append('github_url', sourceUrl);
+    const branch = document.getElementById('githubBranchInput').value.trim();
+    if (branch) formData.append('branch', branch);
+  }
+
+  fetch(`${BACKEND_URL}/api/analyze`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session.access_token}` },
+    body: formData,
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error('Analysis failed:', body.error || res.statusText);
+      }
+    })
+    .catch((err) => console.error('Could not reach analysis backend:', err))
+    .finally(async () => {
+      // Refresh whichever view is currently open so the completed
+      // (or failed) status shows up without the user refreshing manually.
+      if (!document.getElementById('dashboardView').classList.contains('hidden')) await showDashboard();
+      if (currentReviewId === review.id && !document.getElementById('detailView').classList.contains('hidden')) {
+        await fetchReviews();
+        renderDetail(review.id);
+      }
+    });
+
+  // Reset form
+  document.getElementById('projectNameInput').value = '';
+  selectedFileName = null;
+  selectedFile = null;
+  document.getElementById('dropzoneLabel').textContent = 'Drag and drop a .py or .js file here';
+  document.getElementById('pasteCodeArea').value = '';
+  document.getElementById('githubUrlInput').value = '';
+  document.getElementById('githubBranchInput').value = '';
+}
+
+// ============================================================
+// Dashboard rendering
+// ============================================================
+function statusBadge(status) {
+  const map = {
+    completed: 'bg-success/10 text-success',
+    processing: 'bg-warning/10 text-warning',
+    failed: 'bg-danger/10 text-danger',
+    pending: 'bg-muted/10 text-secondary',
+  };
+  return `<span class="px-2 py-0.5 rounded text-xs font-medium ${map[status] || map.pending}">${status}</span>`;
+}
+
+function uploadTypeIcon(type) {
+  return { file_upload: '📄', code_paste: '⌨', github: '⎇' }[type] || '•';
+}
+
+function scoreColor(score) {
+  if (score === null) return 'text-muted';
+  if (score >= 80) return 'text-success';
+  if (score >= 60) return 'text-warning';
+  return 'text-danger';
+}
+
+function renderDashboard() {
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  const statusFilter = document.getElementById('statusFilter').value;
+  const filtered = reviews.filter(r =>
+    r.project_name.toLowerCase().includes(search) &&
+    (statusFilter === 'all' || r.status === statusFilter)
+  );
+
+  const listEl = document.getElementById('reviewList');
+  const emptyEl = document.getElementById('emptyState');
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = '';
+    emptyEl.classList.remove('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+
+  listEl.innerHTML = filtered.map(r => `
+    <div onclick="${r.status === 'completed' ? `showDetail('${r.id}')` : ''}" class="flex items-center justify-between bg-surface border border-subtle rounded-lg px-4 py-3 ${r.status === 'completed' ? 'cursor-pointer hover:border-muted' : ''} transition-colors">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="font-mono text-secondary">${uploadTypeIcon(r.upload_type)}</span>
+        <div class="min-w-0">
+          <p class="text-sm font-medium truncate">${r.project_name}</p>
+          <p class="text-xs text-secondary">${r.created_at}</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 shrink-0">
+        ${statusBadge(r.status)}
+        <span class="font-mono text-sm font-medium w-10 text-right ${scoreColor(r.review_score)}">${r.review_score !== null ? r.review_score : '—'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ============================================================
+// Detail rendering
+// ============================================================
+function severityBadge(sev) {
+  const map = {
+    critical: 'bg-danger/10 text-danger',
+    high: 'bg-danger/10 text-danger',
+    medium: 'bg-warning/10 text-warning',
+    low: 'bg-muted/10 text-secondary',
+  };
+  return `<span class="px-2 py-0.5 rounded text-xs font-medium ${map[sev] || map.low}">${sev}</span>`;
+}
+
+function gaugeCircle(score) {
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (score / 100) * circumference;
+  const color = score >= 80 ? '#22C55E' : score >= 60 ? '#F59E0B' : '#EF4444';
+  return `
+    <svg width="110" height="110" viewBox="0 0 110 110">
+      <circle cx="55" cy="55" r="${radius}" fill="none" stroke="#232938" stroke-width="8"/>
+      <circle cx="55" cy="55" r="${radius}" fill="none" stroke="${color}" stroke-width="8"
+        stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"
+        stroke-linecap="round" transform="rotate(-90 55 55)"/>
+      <text x="55" y="60" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="24" font-weight="600" fill="${color}">${score}</text>
+    </svg>`;
+}
+
+let activeFindingsFilter = 'all';
+
+function renderDetail(id) {
+  const r = reviews.find(x => x.id === id);
+  if (!r) return;
+  activeFindingsFilter = 'all';
+
+  const metricCard = (label, value) => `
+    <div class="bg-surface border border-subtle rounded-lg px-4 py-3">
+      <p class="text-xs text-secondary mb-1">${label}</p>
+      <p class="font-mono text-lg font-medium">${value}</p>
+    </div>`;
+
+  document.getElementById('detailContent').innerHTML = `
+    <div class="flex items-start justify-between mb-8">
+      <div>
+        <h1 class="font-display text-2xl font-semibold mb-1">${r.project_name}</h1>
+        <p class="text-secondary text-sm">${uploadTypeIcon(r.upload_type)} ${r.upload_type.replace('_', ' ')} · ${r.created_at}</p>
+      </div>
+      <button onclick="deleteReview('${r.id}')" class="text-secondary hover:text-danger text-sm">Delete review</button>
+    </div>
+
+    <div class="flex items-center gap-8 mb-8">
+      ${gaugeCircle(r.review_score)}
+      <div class="grid grid-cols-2 gap-3 flex-1">
+        ${metricCard('Maintainability', r.maintainability_index)}
+        ${metricCard('Cyclomatic complexity', r.cyclomatic_complexity)}
+        ${metricCard('Lines of code', r.total_lines_of_code)}
+        ${metricCard('Functions / classes', r.num_functions + ' / ' + r.num_classes)}
+      </div>
+    </div>
+
+    <h2 class="font-display text-lg font-semibold mb-3">Findings</h2>
+    <div class="flex gap-1 mb-4 border-b border-subtle" id="findingsTabs"></div>
+    <div id="findingsList" class="space-y-3"></div>
+  `;
+
+  renderFindingsTabs(r);
+  renderFindingsList(r);
+}
+
+function renderFindingsTabs(r) {
+  const sources = ['all', ...new Set(r.findings.map(f => f.tool_source))];
+  document.getElementById('findingsTabs').innerHTML = sources.map(s => `
+    <button onclick="filterFindings('${r.id}', '${s}')" class="px-3 py-2 text-sm font-medium border-b-2 ${s === activeFindingsFilter ? 'tab-active' : 'tab-inactive'}">${s === 'all' ? 'All' : s}</button>
+  `).join('');
+}
+
+function filterFindings(reviewId, source) {
+  activeFindingsFilter = source;
+  const r = reviews.find(x => x.id === reviewId);
+  renderFindingsTabs(r);
+  renderFindingsList(r);
+}
+
+function renderFindingsList(r) {
+  const findings = activeFindingsFilter === 'all' ? r.findings : r.findings.filter(f => f.tool_source === activeFindingsFilter);
+  const listEl = document.getElementById('findingsList');
+
+  if (findings.length === 0) {
+    listEl.innerHTML = '<p class="text-secondary text-sm py-8 text-center">No findings in this category.</p>';
+    return;
+  }
+
+  listEl.innerHTML = findings.map(f => `
+    <div class="bg-surface border border-subtle rounded-lg px-4 py-3">
+      <div class="flex items-center gap-2 mb-2">
+        ${severityBadge(f.severity)}
+        <span class="text-xs text-muted font-mono">${f.tool_source}</span>
+        <span class="text-xs text-muted font-mono ml-auto">${f.file_name}:${f.line_number}</span>
+      </div>
+      <p class="text-sm font-medium mb-1">${f.issue}</p>
+      <p class="text-sm text-secondary mb-2">${f.explanation}</p>
+      <p class="text-sm text-primary bg-surface2 rounded px-3 py-2"><span class="text-secondary">Suggestion: </span>${f.suggestion}</p>
+    </div>
+  `).join('');
+}
+
+async function deleteReview(id) {
+  const r = reviews.find(x => x.id === id);
+  if (!r) return;
+  // Deleting the project cascades to its review + findings (schema.sql).
+  const { error } = await supabase.from('projects').delete().eq('id', r.project_id);
+  if (error) {
+    alert(error.message);
+    return;
+  }
+  await showDashboard();
+}
+
+// Default auth tab
+switchAuthTab('login');
+switchSubmitTab('upload');
+
+// Module scripts don't expose top-level functions globally, but the
+// HTML above calls these via inline onclick/onchange/oninput attributes.
+Object.assign(window, {
+  switchAuthTab, handleLogin, handleRegister, handleLogout,
+  showSubmission, showDashboard, showDetail,
+  switchSubmitTab, handleFileSelect, handleDrop, startReview,
+  filterFindings, deleteReview,
+});
+</script>
+</body>
+</html>
